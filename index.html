@@ -19,6 +19,12 @@ canvas {
   position: fixed;
   top: 0; left: 0;
 }
+#trailCanvas {
+  display: block;
+  position: fixed;
+  top: 0; left: 0;
+  pointer-events: none;
+}
 #ui {
   position: fixed;
   top: 0; left: 0; right: 0;
@@ -51,6 +57,12 @@ canvas {
   opacity: 0.7;
   text-align: right;
   line-height: 1.8;
+}
+#theme-tag {
+  font-size: 10px;
+  color: #00ff88;
+  letter-spacing: 2px;
+  opacity: 0.8;
 }
 #controls {
   position: fixed;
@@ -194,15 +206,52 @@ canvas {
   color: #D4A853;
   letter-spacing: 3px;
 }
+#help-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10,10,10,0.93);
+  z-index: 30;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+}
+#help-overlay.visible { display: flex; }
+#help-overlay h2 {
+  font-family: 'Syncopate', sans-serif;
+  font-size: 24px;
+  color: #D4A853;
+  letter-spacing: 4px;
+  margin-bottom: 8px;
+}
+#help-overlay .shortcut-row {
+  font-size: 12px;
+  color: #00ff88;
+  letter-spacing: 2px;
+  line-height: 1.8;
+}
+#help-overlay .shortcut-row span { color: #D4A853; }
+#beat-flash {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  opacity: 0;
+  transition: opacity 0.05s;
+}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<canvas id="trailCanvas"></canvas>
+<div id="beat-flash"></div>
 
 <div id="ui">
   <div id="ui-left">
     <div id="title">WAVELENGTH</div>
     <div id="subtitle">AUDIO REACTIVE MANDALA ENGINE</div>
+    <div id="theme-tag">NEON</div>
   </div>
   <div id="stats">
     <div id="freq-display">0 Hz</div>
@@ -220,6 +269,9 @@ canvas {
   <button class="ctrl-btn primary" id="mic-btn">USE MIC</button>
   <button class="ctrl-btn" id="file-btn">LOAD FILE</button>
   <button class="ctrl-btn" id="demo-btn">DEMO MODE</button>
+  <button class="ctrl-btn" id="cycle-btn" title="Auto-cycle modes">AUTO-CYCLE</button>
+  <button class="ctrl-btn" id="ss-btn" title="Screenshot">CAPTURE</button>
+  <button class="ctrl-btn" id="help-btn" title="Help">?</button>
 </div>
 
 <div id="mode-bar">
@@ -231,8 +283,8 @@ canvas {
 </div>
 
 <div id="vol-wrap">
-  <span id="vol-label">VOL</span>
-  <input type="range" id="vol-slider" min="0" max="100" value="80">
+  <span id="vol-label">GAIN</span>
+  <input type="range" id="vol-slider" min="0" max="200" value="100">
 </div>
 
 <div id="drop-overlay">
@@ -240,11 +292,25 @@ canvas {
   <p>MP3 · WAV · OGG · FLAC</p>
 </div>
 
+<div id="help-overlay">
+  <h2>CONTROLS</h2>
+  <div class="shortcut-row"><span>T</span> — Cycle color theme</div>
+  <div class="shortcut-row"><span>S</span> — Screenshot</div>
+  <div class="shortcut-row"><span>P</span> — Particle burst</div>
+  <div class="shortcut-row"><span>C</span> — Auto-cycle modes</div>
+  <div class="shortcut-row"><span>H</span> — Toggle this help</div>
+  <div class="shortcut-row"><span>SCROLL</span> — Zoom (Mandala/Fractal)</div>
+  <div class="shortcut-row"><span>1-5</span> — Select mode</div>
+  <div class="shortcut-row" style="margin-top:8px;color:#666;font-size:10px;">ESC — close</div>
+</div>
+
 <input type="file" id="file-input" accept="audio/*" style="display:none">
 
 <script>
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
+const trailCanvas = document.getElementById('trailCanvas');
+const trailCtx = trailCanvas.getContext('2d');
 let W, H, cx, cy;
 
 const TAU = Math.PI * 2;
@@ -260,18 +326,107 @@ let fractalCenter = { x: -0.5, y: 0 };
 let lastPeakTime = 0;
 let colorPhase = 0;
 let bassEnergy = 0, midEnergy = 0, highEnergy = 0;
-let volume = 0.8;
+let volume = 1.0;
+let sensitivity = 1.0;
+let mandalaZoom = 1.0;
+let autoCycle = false;
+let autoCycleTimer = 0;
+let beatFlashTimer = 0;
 
 const modeNames = ['MANDALA', 'FRACTAL', 'STORM', 'PRISMO', 'TUNNEL'];
 
+// Color themes: { name, gold, neon, bg, accent }
+const themes = [
+  { name: 'NEON',  gold: '#D4A853', neon: '#00ff88', bg: '#0a0a0a', accent: '#00ff88' },
+  { name: 'GOLD',  gold: '#FFD700', neon: '#FFA500', bg: '#0a0a0a', accent: '#FFD700' },
+  { name: 'CYBER', gold: '#00BFFF', neon: '#FF00FF', bg: '#08080f', accent: '#00BFFF' },
+  { name: 'VOID',  gold: '#9966FF', neon: '#CC44FF', bg: '#0a0812', accent: '#9966FF' },
+];
+let themeIdx = 0;
+let theme() { return themes[themeIdx]; }
+
+function gold() {
+  const t = theme();
+  const h = 40 + Math.sin(colorPhase)*15;
+  return `hsl(${h}, 90%, ${60 + Math.random()*15}%)`;
+}
+function neon() {
+  const t = theme();
+  const h = 140 + Math.sin(colorPhase*1.3)*20;
+  return `hsl(${h}, 100%, ${55 + Math.random()*15}%)`;
+}
+function accent() { return theme().accent; }
+function gCol() { return theme().gold; }
+
 function resize() {
-  W = canvas.width = window.innerWidth;
-  H = canvas.height = window.innerHeight;
+  W = canvas.width = trailCanvas.width = window.innerWidth;
+  H = canvas.height = trailCanvas.height = window.innerHeight;
   cx = W / 2;
   cy = H / 2;
 }
 resize();
 window.addEventListener('resize', resize);
+
+function cycleTheme() {
+  themeIdx = (themeIdx + 1) % themes.length;
+  document.getElementById('theme-tag').textContent = theme().name;
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 't' || e.key === 'T') cycleTheme();
+  if (e.key === 's' || e.key === 'S') takeScreenshot();
+  if (e.key === 'p' || e.key === 'P') spawnBurst(cx, cy, 80, gold());
+  if (e.key === 'c' || e.key === 'C') toggleAutoCycle();
+  if (e.key === 'h' || e.key === 'H') toggleHelp();
+  if (e.key === 'Escape') closeHelp();
+  if (e.key === '1') switchMode(0);
+  if (e.key === '2') switchMode(1);
+  if (e.key === '3') switchMode(2);
+  if (e.key === '4') switchMode(3);
+  if (e.key === '5') switchMode(4);
+});
+
+function switchMode(m) {
+  mode = m;
+  document.querySelectorAll('.mode-pill').forEach(p => p.classList.remove('on'));
+  document.querySelectorAll('.mode-pill')[m].classList.add('on');
+  if (mode === 1) { fractalZoom = 1; fractalCenter = { x: -0.5, y: 0 }; }
+  particles = [];
+}
+
+function toggleAutoCycle() {
+  autoCycle = !autoCycle;
+  autoCycleTimer = 0;
+  const btn = document.getElementById('cycle-btn');
+  if (autoCycle) btn.classList.add('active');
+  else btn.classList.remove('active');
+}
+
+function toggleHelp() {
+  document.getElementById('help-overlay').classList.toggle('visible');
+}
+function closeHelp() {
+  document.getElementById('help-overlay').classList.remove('visible');
+}
+
+function takeScreenshot() {
+  const tmp = document.createElement('canvas');
+  tmp.width = W; tmp.height = H;
+  const tctx = tmp.getContext('2d');
+  tctx.drawImage(trailCanvas, 0, 0);
+  tctx.drawImage(canvas, 0, 0);
+  const link = document.createElement('AA');
+  link.download = 'wavelength-' + Date.now() + '.png';
+  link.href = tmp.toDataURL('image/png');
+  link.click();
+}
+
+canvas.addEventListener('wheel', (e) => {
+  if (mode === 0) {
+    mandalaZoom = Math.max(0.2, Math.min(5, mandalaZoom - e.deltaY * 0.001));
+  } else if (mode === 1) {
+    fractalZoom = Math.max(1, Math.min(50, fractalZoom + e.deltaY * 0.0005));
+  }
+}, { passive: true });
 
 // ── AUDIO ──────────────────────────────────────────────────────
 function initAudio() {
@@ -335,6 +490,13 @@ document.getElementById('file-btn').addEventListener('click', () => {
 document.getElementById('file-input').addEventListener('change', (e) => {
   if (e.target.files[0]) loadAudioFile(e.target.files[0]);
 });
+document.getElementById('cycle-btn').addEventListener('click', toggleAutoCycle);
+document.getElementById('ss-btn').addEventListener('click', takeScreenshot);
+document.getElementById('help-btn').addEventListener('click', toggleHelp);
+
+document.getElementById('vol-slider').addEventListener('input', (e) => {
+  sensitivity = e.target.value / 100;
+});
 
 // Mode pills
 document.querySelectorAll('.mode-pill').forEach(pill => {
@@ -345,11 +507,6 @@ document.querySelectorAll('.mode-pill').forEach(pill => {
     if (mode === 1) { fractalZoom = 1; fractalCenter = { x: -0.5, y: 0 }; }
     particles = [];
   });
-});
-
-document.getElementById('vol-slider').addEventListener('input', (e) => {
-  volume = e.target.value / 100;
-  if (gainNode) gainNode.gain.value = volume;
 });
 
 // Drag & drop
@@ -384,9 +541,12 @@ class Particle {
     const alpha = this.life / this.maxLife;
     ctx.globalAlpha = alpha;
     ctx.fillStyle = this.color;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = this.color;
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.size * alpha, 0, TAU);
     ctx.fill();
+    ctx.shadowBlur = 0;
     ctx.globalAlpha = 1;
   }
 }
@@ -405,6 +565,13 @@ function spawnBurst(x, y, count, col) {
   }
 }
 
+function triggerBeatFlash(intensity) {
+  const flash = document.getElementById('beat-flash');
+  flash.style.background = theme().accent;
+  flash.style.opacity = Math.min(intensity * 0.15, 0.25);
+  beatFlashTimer = 3;
+}
+
 // ── COLOR UTILS ─────────────────────────────────────────────────
 function h2r(h, s, v) {
   let r, g, b;
@@ -421,8 +588,6 @@ function h2r(h, s, v) {
   return `rgb(${Math.floor(r*255)},${Math.floor(g*255)},${Math.floor(b*255)})`;
 }
 
-function gold() { return `hsl(${40 + Math.sin(colorPhase)*15}, 90%, ${60 + Math.random()*15}%)`; }
-function neon() { return `hsl(${140 + Math.sin(colorPhase*1.3)*20}, 100%, ${55 + Math.random()*15}%)`; }
 function mix(a, b, t) { return a * (1-t) + b * t; }
 
 // ── ANALYSIS ────────────────────────────────────────────────────
@@ -442,9 +607,12 @@ function analyze() {
   for (let i = 0; i < bins * 0.1; i++) bass += frequencyData[i];
   for (let i = Math.floor(bins*0.1); i < bins * 0.5; i++) mid += frequencyData[i];
   for (let i = Math.floor(bins*0.5); i < bins; i++) high += frequencyData[i];
-  bassEnergy = (bass / (bins * 0.1)) / 255;
-  midEnergy = (mid / (bins * 0.4)) / 255;
-  highEnergy = (high / (bins * 0.5)) / 255;
+  bassEnergy = ((bass / (bins * 0.1)) / 255) * sensitivity;
+  midEnergy = ((mid / (bins * 0.4)) / 255) * sensitivity;
+  highEnergy = ((high / (bins * 0.5)) / 255) * sensitivity;
+  bassEnergy = Math.min(bassEnergy, 1);
+  midEnergy = Math.min(midEnergy, 1);
+  highEnergy = Math.min(highEnergy, 1);
 
   // Dominant freq
   let maxIdx = 0, maxVal = 0;
@@ -461,13 +629,18 @@ function drawMandala(dt) {
   mandalaAngle += bassEnergy * 0.05;
   const arms = 8 + Math.floor(midEnergy * 8);
   const rings = 6 + Math.floor(highEnergy * 10);
+  const acc = accent();
 
   for (let ring = 1; ring <= rings; ring++) {
-    const radius = (ring / rings) * Math.min(W, H) * 0.42 * (1 + bassEnergy * 0.5);
+    const baseR = (ring / rings) * Math.min(W, H) * 0.42 * (1 + bassEnergy * 0.5) * mandalaZoom;
+    const radius = baseR;
     const pts = arms * ring;
     const hue = (colorPhase * 20 + ring * 15) % 360;
-    ctx.strokeStyle = `hsla(${40 + hue * 0.3}, 90%, 60%, ${0.3 + bassEnergy * 0.5})`;
+    const themeAccent = themeAccentColor(hue);
+    ctx.strokeStyle = `hsla(${hue}, 90%, 60%, ${0.3 + bassEnergy * 0.5})`;
     ctx.lineWidth = 1 + highEnergy * 2;
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = themeAccent;
     ctx.beginPath();
     for (let p = 0; p <= pts; p++) {
       const a = (p / pts) * TAU + mandalaAngle + ring * 0.1;
@@ -478,11 +651,13 @@ function drawMandala(dt) {
     }
     ctx.closePath();
     ctx.stroke();
+    ctx.shadowBlur = 0;
   }
 
   // Center burst on beat
   if (bassEnergy > 0.6 && Date.now() - lastPeakTime > 200) {
-    spawnBurst(cx, cy, Math.floor(bassEnergy * 40), gold());
+    spawnBurst(cx, cy, Math.floor(bassEnergy * 40), gCol());
+    triggerBeatFlash(bassEnergy);
     lastPeakTime = Date.now();
   }
 
@@ -499,6 +674,14 @@ function drawMandala(dt) {
       col, 40, 2
     ));
   }
+}
+
+function themeAccentColor(hue) {
+  const t = theme();
+  if (t.name === 'NEON') return '#00ff88';
+  if (t.name === 'GOLD') return '#FFD700';
+  if (t.name === 'CYBER') return '#00BFFF';
+  return '#9966FF';
 }
 
 function drawFractal(dt) {
@@ -542,9 +725,12 @@ function drawFractal(dt) {
   if (bassEnergy > 0.5) {
     ctx.strokeStyle = `rgba(212,168,83,${bassEnergy * 0.3})`;
     ctx.lineWidth = 2;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = gCol();
     ctx.beginPath();
     ctx.arc(cx, cy, 20 + bassEnergy * 50, 0, TAU);
     ctx.stroke();
+    ctx.shadowBlur = 0;
   }
 
   if (midEnergy > 0.5 && Math.random() < 0.3) {
@@ -560,13 +746,16 @@ function drawStorm(dt) {
   for (let i = 0; i < cols; i++) {
     const bin = Math.floor(i * frequencyData.length / cols / 4);
     const val = running ? (frequencyData[bin] || 0) / 255 : 0;
-    const barH = val * H * 0.7;
+    const barH = val * H * 0.7 * sensitivity;
     const hue = (i / cols) * 60 + 40 + colorPhase * 15;
     const grad = ctx.createLinearGradient(0, H - barH, 0, H);
     grad.addColorStop(0, `hsla(${hue}, 100%, 65%, 0.9)`);
     grad.addColorStop(1, `hsla(${hue}, 100%, 40%, 0.3)`);
     ctx.fillStyle = grad;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = accent();
     ctx.fillRect(i * barW, H - barH, barW - 1, barH);
+    ctx.shadowBlur = 0;
 
     // Particles falling from bars
     if (val > 0.4 && Math.random() < val * 0.4) {
@@ -597,7 +786,7 @@ function drawStorm(dt) {
 
 function drawPrismo(dt) {
   const sectors = 6 + Math.floor(bassEnergy * 6);
-  const innerR = 60 + bassEnergy * 40;
+  const innerR = (60 + bassEnergy * 40) * mandalaZoom;
   const now = colorPhase;
 
   for (let s = 0; s < sectors; s++) {
@@ -624,7 +813,10 @@ function drawPrismo(dt) {
     // Edge glow
     ctx.strokeStyle = `hsla(${hue}, 100%, 70%, ${0.3 + highEnergy * 0.5})`;
     ctx.lineWidth = 1.5;
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = accent();
     ctx.stroke();
+    ctx.shadowBlur = 0;
   }
 
   // Spinning inner ring
@@ -636,22 +828,24 @@ function drawPrismo(dt) {
     const len = innerR * 0.8;
     ctx.strokeStyle = `rgba(212,168,83,${0.3 + bassEnergy * 0.4})`;
     ctx.lineWidth = 2;
+    ctx.shadowBlur = 4;
+    ctx.shadowColor = gCol();
     ctx.beginPath();
     ctx.moveTo(Math.cos(a) * 10, Math.sin(a) * 10);
     ctx.lineTo(Math.cos(a) * len, Math.sin(a) * len);
     ctx.stroke();
   }
   ctx.restore();
+  ctx.shadowBlur = 0;
 
-  if (bassEnergy > 0.5) spawnBurst(cx, cy, Math.floor(bassEnergy * 20), gold());
+  if (bassEnergy > 0.5) spawnBurst(cx, cy, Math.floor(bassEnergy * 20), gCol());
 }
 
 function drawTunnel(dt) {
   const depth = 30;
   const speed = 3 + bassEnergy * 8;
 
-  ctx.fillStyle = '#0a0a0a';
-  ctx.fillRect(0, 0, W, H);
+  // Don't clear — trail canvas handles persistence
 
   // Tunnel rings
   for (let i = depth; i > 0; i--) {
@@ -661,9 +855,12 @@ function drawTunnel(dt) {
     const hue = (colorPhase * 20 + i * 10) % 360;
     ctx.strokeStyle = `hsla(${hue * 0.3 + 40}, 90%, 60%, ${alpha})`;
     ctx.lineWidth = 1 + (1 - t) * 3;
+    ctx.shadowBlur = 4;
+    ctx.shadowColor = accent();
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, TAU);
     ctx.stroke();
+    ctx.shadowBlur = 0;
   }
 
   // Radial lines
@@ -719,7 +916,28 @@ function loop(ts) {
   colorPhase += 0.008;
   analyze();
 
-  ctx.fillStyle = 'rgba(10,10,10,0.15)';
+  // Auto-cycle modes
+  if (autoCycle) {
+    autoCycleTimer += dt;
+    if (autoCycleTimer > 8) {
+      autoCycleTimer = 0;
+      switchMode((mode + 1) % 5);
+    }
+  }
+
+  // Beat flash decay
+  if (beatFlashTimer > 0) {
+    beatFlashTimer -= dt;
+    const flash = document.getElementById('beat-flash');
+    flash.style.opacity = Math.max(0, (beatFlashTimer / 3) * 0.2);
+  }
+
+  // Trail persistence — fade previous frame
+  trailCtx.fillStyle = 'rgba(10,10,10,0.12)';
+  trailCtx.fillRect(0, 0, W, H);
+
+  // Main canvas clear (slight — not full, for trail effect in tunnel)
+  ctx.fillStyle = 'rgba(10,10,10,0.08)';
   ctx.fillRect(0, 0, W, H);
 
   // Vignette
@@ -737,9 +955,29 @@ function loop(ts) {
     case 4: drawTunnel(dt); break;
   }
 
-  // Update + draw particles
+  // Draw particles on trail canvas too for persistence
   particles = particles.filter(p => p.life > 0);
-  particles.forEach(p => { p.update(); p.draw(); });
+  particles.forEach(p => {
+    p.update();
+    // Draw on main canvas with glow
+    const alpha = p.life / p.maxLife;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * alpha, 0, TAU);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+    // Also draw ghost on trail canvas
+    trailCtx.globalAlpha = alpha * 0.4;
+    trailCtx.fillStyle = p.color;
+    trailCtx.beginPath();
+    trailCtx.arc(p.x, p.y, p.size * alpha * 1.5, 0, TAU);
+    trailCtx.fill();
+    trailCtx.globalAlpha = 1;
+  });
   document.getElementById('particles-display').textContent = 'PARTICLES: ' + particles.length;
 
   requestAnimationFrame(loop);
